@@ -9,6 +9,8 @@
 - `docs/`：Vivado、PetaLinux、Qt、网络调试和已知问题记录。
 - `hardware/`：PL 显示和采集拓扑说明。
 
+rootfs.ext4 的构建条件、配置开关和复现步骤见 [`docs/rootfs_ext4_build.md`](docs/rootfs_ext4_build.md)。
+
 ## 数据路径
 
 ```text
