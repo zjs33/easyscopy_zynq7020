@@ -1,0 +1,21 @@
+# Generated build output and IDE state
+build/
+build-*/
+*.user
+*.suo
+*.swp
+
+# PetaLinux/Vivado generated output
+petalinux/build/
+petalinux/images/
+petalinux/components/yocto/
+*.xsa
+*.bit
+*.bin
+*.elf
+
+# Large deployment artifacts; obtain them from the documented build flow
+*.tar.gz
+*.ext4
+*.ub
+*.otf

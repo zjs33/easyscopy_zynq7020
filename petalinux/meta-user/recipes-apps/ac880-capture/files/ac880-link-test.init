@@ -1,0 +1,15 @@
+#!/bin/sh
+
+case "$1" in
+    start)
+        # BusyBox init variants used by the AC880 BSP may not respawn the
+        # tty1 entry reliably.  Start agetty as a fallback; avoid duplicates
+        # when init has already created it.
+        if [ -e /dev/tty1 ] && ! ps | grep -q '[g]etty .*tty1'; then
+            /sbin/getty -L -a root 38400 tty1 >/dev/null 2>&1 &
+        fi
+        ;;
+    stop)
+        ;;
+esac
+exit 0

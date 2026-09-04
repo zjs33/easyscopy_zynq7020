@@ -1,0 +1,35 @@
+# Qt Creator user state
+.qtcreator/
+*.user
+*.user.*
+
+# Build trees and generated binaries
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+*_autogen/
+*.exe
+*.dll
+*.a
+*.o
+*.obj
+*.pdb
+
+# Generated previews and exports
+*.png
+*.csv
+*.txt
+!CMakeLists.txt
+dist/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

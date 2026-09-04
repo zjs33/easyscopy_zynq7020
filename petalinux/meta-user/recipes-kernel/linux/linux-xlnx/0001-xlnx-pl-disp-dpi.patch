@@ -1,0 +1,168 @@
+--- a/drivers/gpu/drm/xlnx/xlnx_pl_disp.c
++++ b/drivers/gpu/drm/xlnx/xlnx_pl_disp.c
+@@ -17,6 +17,11 @@
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_gem_dma_helper.h>
+ #include <drm/drm_vblank.h>
++#include <drm/drm_connector.h>
++#include <drm/drm_encoder.h>
++#include <drm/drm_probe_helper.h>
++#include <linux/of_graph.h>
++#include <video/of_display_timing.h>
+ #include <linux/component.h>
+ #include <linux/delay.h>
+ #include <linux/device.h>
+@@ -92,6 +97,10 @@
+ 	u32 fid_err_val;
+ 	struct drm_property *fid_out_prop;
+ 	u32 fid_out_val;
++	struct drm_encoder encoder;
++	struct drm_connector connector;
++	struct drm_display_mode mode;
++	bool mode_valid;
+ };
+ 
+ /*
+@@ -101,6 +110,106 @@
+ {
+ 	return container_of(xlnx_crtc, struct xlnx_pl_disp, xlnx_crtc);
+ }
++
++static inline struct xlnx_pl_disp *connector_to_dma(struct drm_connector *connector)
++{
++	return container_of(connector, struct xlnx_pl_disp, connector);
++}
++
++static int xlnx_pl_disp_connector_get_modes(struct drm_connector *connector)
++{
++	struct xlnx_pl_disp *xlnx_pl_disp = connector_to_dma(connector);
++	struct drm_display_mode *mode;
++
++	if (!xlnx_pl_disp->mode_valid)
++		return 0;
++
++	mode = drm_mode_duplicate(connector->dev, &xlnx_pl_disp->mode);
++	if (!mode)
++		return 0;
++
++	drm_mode_probed_add(connector, mode);
++	return 1;
++}
++
++static enum drm_connector_status
++xlnx_pl_disp_connector_detect(struct drm_connector *connector, bool force)
++{
++	return connector_status_connected;
++}
++
++static const struct drm_connector_helper_funcs
++xlnx_pl_disp_connector_helper_funcs = {
++	.get_modes = xlnx_pl_disp_connector_get_modes,
++};
++
++static const struct drm_connector_funcs xlnx_pl_disp_connector_funcs = {
++	.detect = xlnx_pl_disp_connector_detect,
++	.fill_modes = drm_helper_probe_single_connector_modes,
++	.destroy = drm_connector_cleanup,
++	.reset = drm_atomic_helper_connector_reset,
++	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
++	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
++};
++
++static const struct drm_encoder_funcs xlnx_pl_disp_encoder_funcs = {
++	.destroy = drm_encoder_cleanup,
++};
++
++static int xlnx_pl_disp_parse_mode(struct device *dev,
++					struct xlnx_pl_disp *xlnx_pl_disp)
++{
++	struct device_node *endpoint, *panel;
++	struct display_timing timing;
++	struct videomode vm;
++
++	endpoint = of_graph_get_next_endpoint(dev->of_node, NULL);
++	if (!endpoint)
++		return -ENODEV;
++
++	panel = of_graph_get_remote_port_parent(endpoint);
++	of_node_put(endpoint);
++	if (!panel)
++		return -ENODEV;
++
++	of_get_display_timing(panel, "panel-timing", &timing);
++	of_node_put(panel);
++	videomode_from_timing(&timing, &vm);
++
++	drm_display_mode_from_videomode(&vm, &xlnx_pl_disp->mode);
++	xlnx_pl_disp->mode.type = DRM_MODE_TYPE_DRIVER |
++		DRM_MODE_TYPE_PREFERRED;
++	xlnx_pl_disp->mode_valid = true;
++	return 0;
++}
++
++static int xlnx_pl_disp_register_connector(struct drm_device *drm,
++						struct xlnx_pl_disp *xlnx_pl_disp)
++{
++	int ret;
++
++	ret = drm_encoder_init(drm, &xlnx_pl_disp->encoder,
++				       &xlnx_pl_disp_encoder_funcs,
++				       DRM_MODE_ENCODER_DPI, NULL);
++	if (ret)
++		return ret;
++
++	xlnx_pl_disp->encoder.possible_crtcs = 1;
++	ret = drm_connector_init(drm, &xlnx_pl_disp->connector,
++					&xlnx_pl_disp_connector_funcs,
++					DRM_MODE_CONNECTOR_DPI);
++	if (ret) {
++		drm_encoder_cleanup(&xlnx_pl_disp->encoder);
++		return ret;
++	}
++
++	drm_connector_helper_add(&xlnx_pl_disp->connector,
++					 &xlnx_pl_disp_connector_helper_funcs);
++	drm_connector_attach_encoder(&xlnx_pl_disp->connector,
++					     &xlnx_pl_disp->encoder);
++	return 0;
++}
++
+ 
+ /**
+  * xlnx_pl_disp_complete - vblank handler
+@@ -550,6 +659,15 @@
+ 	drm_object_attach_property(obj, xlnx_pl_disp->fid_err_prop, 0);
+ 	drm_object_attach_property(obj, xlnx_pl_disp->fid_out_prop, 0);
+ 
++	ret = xlnx_pl_disp_register_connector(drm, xlnx_pl_disp);
++	if (ret) {
++		drm_property_destroy(xlnx_pl_disp->drm, xlnx_pl_disp->fid_out_prop);
++		drm_property_destroy(xlnx_pl_disp->drm, xlnx_pl_disp->fid_err_prop);
++		drm_crtc_cleanup(&xlnx_pl_disp->xlnx_crtc.crtc);
++		drm_plane_cleanup(&xlnx_pl_disp->plane);
++		return ret;
++	}
++
+ 	xlnx_crtc_register(xlnx_pl_disp->drm, &xlnx_pl_disp->xlnx_crtc);
+ 
+ 	return 0;
+@@ -563,6 +681,8 @@
+ 	drm_property_destroy(xlnx_pl_disp->drm, xlnx_pl_disp->fid_out_prop);
+ 	drm_property_destroy(xlnx_pl_disp->drm, xlnx_pl_disp->fid_err_prop);
+ 	xlnx_crtc_unregister(xlnx_pl_disp->drm, &xlnx_pl_disp->xlnx_crtc);
++	drm_connector_cleanup(&xlnx_pl_disp->connector);
++	drm_encoder_cleanup(&xlnx_pl_disp->encoder);
+ 	drm_plane_cleanup(&xlnx_pl_disp->plane);
+ 	drm_crtc_cleanup(&xlnx_pl_disp->xlnx_crtc.crtc);
+ }
+@@ -586,6 +706,10 @@
+ 	xlnx_pl_disp = devm_kzalloc(dev, sizeof(*xlnx_pl_disp), GFP_KERNEL);
+ 	if (!xlnx_pl_disp)
+ 		return -ENOMEM;
++
++	ret = xlnx_pl_disp_parse_mode(dev, xlnx_pl_disp);
++	if (ret)
++		dev_warn(dev, "fixed DPI panel timing not found: %d\n", ret);
+ 
+ 	dma_chan = of_dma_request_slave_channel(dev->of_node, "dma0");
+ 	if (IS_ERR_OR_NULL(dma_chan)) {

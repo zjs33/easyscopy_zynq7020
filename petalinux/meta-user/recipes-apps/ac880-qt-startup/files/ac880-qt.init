@@ -1,0 +1,104 @@
+#!/bin/sh
+
+# AC880 Qt oscilloscope boot service.  The Qt executable, libraries, plugins
+# and font are deployed separately under /opt/ac880-qt.  This small init
+# recipe makes their startup persistent without modifying generated DTS or
+# the Qt installation itself.
+
+APP=/opt/ac880-qt/bin/ac880_zynq_scope
+DMA=/dev/ac880_capture_dma
+UIO=/dev/uio0
+FB=/dev/fb0
+TOUCH=/dev/input/event0
+CTL=/usr/bin/ac880_capture_ctl
+PIDFILE=/run/ac880_zynq_scope.pid
+LOG=/tmp/ac880_qt.log
+
+wait_for_node()
+{
+    node="$1"
+    tries=0
+    while [ ! -e "$node" ] && [ "$tries" -lt 30 ]; do
+        sleep 1
+        tries=$((tries + 1))
+    done
+    [ -e "$node" ]
+}
+
+is_running()
+{
+    pidof ac880_zynq_scope >/dev/null 2>&1
+}
+
+start_qt()
+{
+    if is_running; then
+        echo "AC880 Qt is already running" >> "$LOG"
+        return 0
+    fi
+
+    if [ ! -x "$APP" ]; then
+        echo "AC880 Qt startup: missing executable $APP" >> "$LOG"
+        return 0
+    fi
+    if ! wait_for_node "$FB" || ! wait_for_node "$DMA"; then
+        echo "AC880 Qt startup: framebuffer or DMA device not ready" >> "$LOG"
+        return 0
+    fi
+    # The PL producer is configured once at boot.  The Qt toolbar remains in
+    # the stopped state (ZYNQ_SCOPE_AUTORUN=0); pressing "开始" starts the Qt
+    # DMA reader and continuous waveform display.
+    if [ -x "$CTL" ] && [ -e "$UIO" ]; then
+        "$CTL" "$UIO" clear >> "$LOG" 2>&1 || true
+        "$CTL" "$UIO" adc >> "$LOG" 2>&1 || true
+        "$CTL" "$UIO" start >> "$LOG" 2>&1 || true
+    else
+        echo "AC880 Qt startup: capture control node is unavailable" >> "$LOG"
+    fi
+
+    export AC880_CAPTURE_DEVICE="$DMA"
+    export AC880_TOUCH_DEVICE="$TOUCH"
+    export AC880_TOUCH_BACKEND="bridge"
+    export AC880_CAPTURE_AUTOSTART=0
+    export ZYNQ_SCOPE_AUTORUN=0
+    export ZYNQ_SCOPE_FULLSCREEN=1
+    export ZYNQ_SCOPE_TOUCH=1
+    export QT_QPA_PLATFORM="linuxfb:fb=$FB"
+    export QT_QPA_PLATFORM_PLUGIN_PATH=/opt/ac880-qt/plugins/platforms
+    export QT_PLUGIN_PATH=/opt/ac880-qt/plugins
+    export QT_QPA_FONTDIR=/opt/ac880-qt/fonts
+    export QT_QPA_FB_NO_LIBINPUT=1
+    export QT_QPA_FB_DISABLE_INPUT=1
+    export QT_QPA_GENERIC_PLUGINS=
+    export LD_LIBRARY_PATH="/opt/ac880-qt/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+    "$APP" --dma-device "$DMA" --fullscreen >> "$LOG" 2>&1 &
+    echo "$!" > "$PIDFILE"
+    echo "AC880 Qt started (autocapture off; use the toolbar 开始 button)" >> "$LOG"
+}
+
+stop_qt()
+{
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE" 2>/dev/null || true)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        rm -f "$PIDFILE"
+    else
+        killall ac880_zynq_scope 2>/dev/null || true
+    fi
+    if [ -x "$CTL" ] && [ -e "$UIO" ]; then
+        "$CTL" "$UIO" stop >/dev/null 2>&1 || true
+    fi
+}
+
+case "$1" in
+    start)
+        start_qt
+        ;;
+    stop|restart)
+        stop_qt
+        [ "$1" = restart ] && start_qt
+        ;;
+esac
+
+exit 0
